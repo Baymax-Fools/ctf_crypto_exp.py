@@ -1,2 +1,4 @@
-/.vene
-/z_practices
+.venv/
+z_practices/
+.idea/
+__pycache__/
