@@ -1,0 +1,199 @@
+# Sage 专用：完全使用 SageMath 内置函数，直接显示结果
+from sage.all import *
+
+# ---------- 参数 ----------
+p = 12011525995131123638856398628790616238390819143793715067681777677580672053939178969642750241560824301330637775350150164841002624342957867201046659270774321
+q = 11559848036543977536618779383354527465877210952129546017550474513248166778543016507802003102239650062697089674048694142164127142205998713709908639891913279
+r = 9919453136128731180353641658512944982390490473148116116167240081761821921209706702557854609203013856416413229743185775260680051404176535062813533001453029
+e = 1297450108
+c = 254437839234710932548963084800696912447199841209292016504026652383142017227876963989808065988983617626350151358444895183944611290313513729505521630711812174923796964838915751672967332321515720258149777206328112312514688748335753179198631177743199829645308091442800427146012476434191025450662950787631144984158609948536064605299987908223963902731920237033619141863042816600729594847568654431928343565350409273886054122366132475796004834811862120850908513978375240
+
+n = p * q * r
+
+g_p = gcd(e, p-1)  # 436
+g_q = gcd(e, q-1)  # 2
+g_r = gcd(e, r-1)  # 4
+
+print("=== RSA 参数 ===")
+print(f"p = {p}")
+print(f"q = {q}")
+print(f"r = {r}")
+print(f"e = {e}")
+print(f"gcd(e,p-1) = {g_p}")
+print(f"gcd(e,q-1) = {g_q}")
+print(f"gcd(e,r-1) = {g_r}")
+
+# ---------- 工具 ----------
+def crt_pair(a1, n1, a2, n2):
+    """使用 SageMath 内置的 xgcd 函数"""
+    g, m1, m2 = xgcd(n1, n2)
+    if (a1 - a2) % g != 0:
+        raise ValueError("CRT 无解")
+    lcm_n = lcm(n1, n2)
+    t = ((a2 - a1) // g) * inverse_mod(n1 // g, n2 // g) % (n2 // g)
+    x = (a1 + n1 * t) % lcm_n
+    return x
+
+def crt(list_a, list_n):
+    """中国剩余定理实现"""
+    x, m = list_a[0], list_n[0]
+    for i in range(1, len(list_a)):
+        x = crt_pair(x, m, list_a[i], list_n[i])
+        m = lcm(m, list_n[i])
+    return x
+
+# ---------- 在单个素数上处理 ----------
+def process_prime_sage(name, prime, e_global, c_global, initial_g):
+    print(f"\n=== 处理 {name} (p={prime}) ===")
+    e_local = e_global // initial_g
+    t_local = (prime - 1) // initial_g
+    print(f"初始 e_local = {e_local}")
+    print(f"初始 t_local = {t_local}")
+
+    removed_product = 1
+    while True:
+        g = gcd(e_local, t_local)
+        if g == 1:
+            break
+        removed_product *= g
+        e_local //= g
+        t_local //= g
+        print(f"  约掉 gcd={g}, removed_product = {removed_product}, e_local = {e_local}")
+
+    d_local = inverse_mod(e_local, t_local)
+    a_local = power_mod(c_global, d_local, prime)
+    print(f"计算得到 a_local = {a_local}")
+    K = initial_g * removed_product
+    print(f"总开根次数 K = {K}")
+
+    # 在有限域上求解方程
+    F = GF(prime)
+    R = PolynomialRing(F, 'x')
+    x = R.gen()
+    poly = x**K - F(a_local)
+    roots = poly.roots(multiplicities=False)
+    print(f"在 GF({name}) 上找到根数量: {len(roots)}")
+
+    roots_int = [ZZ(r) for r in roots]
+    return a_local, roots_int
+
+# ---------- 主流程 ----------
+print("\n" + "="*50)
+print("开始处理各个素数...")
+print("="*50)
+
+a_p, roots_p = process_prime_sage("p", p, e, c, g_p)
+a_q, roots_q = process_prime_sage("q", q, e, c, g_q)
+a_r, roots_r = process_prime_sage("r", r, e, c, g_r)
+
+print("\n" + "="*50)
+print("根数量统计：")
+print(f"p: {len(roots_p)} 个根")
+print(f"q: {len(roots_q)} 个根")
+print(f"r: {len(roots_r)} 个根")
+print(f"总组合数: {len(roots_p) * len(roots_q) * len(roots_r)}")
+
+# ---------- CRT 组合并验证 ----------
+print("\n" + "="*50)
+print("开始 CRT 组合并验证...")
+print("="*50)
+
+candidates = []
+count_checked = 0
+flag_candidates = []
+
+for i, rp in enumerate(roots_p):
+    for j, rq in enumerate(roots_q):
+        for k, rr in enumerate(roots_r):
+            count_checked += 1
+            if count_checked % 1000 == 0:
+                print(f"已处理 {count_checked} 个组合...")
+
+            try:
+                m_qr = crt([rq, rr], [q, r])
+                m_all = crt([rp, m_qr], [p, q * r])
+            except Exception as ex:
+                continue
+
+            m_int = ZZ(m_all)
+
+            # 验证
+            if power_mod(m_int, e, n) == c:
+                # 转换为 Python int 以便使用 to_bytes
+                m_python_int = int(m_int)
+                candidates.append(m_python_int)
+                print(f"\n✅ 找到有效候选 #{len(candidates)}:")
+                print(f"   组合索引: p[{i}], q[{j}], r[{k}]")
+                print(f"   数值: {m_python_int}")
+
+                # 转 bytes 尝试显示
+                bytelen = (m_python_int.bit_length() + 7) // 8
+                mb = m_python_int.to_bytes(bytelen, 'big')
+
+                print(f"   十六进制 (前100字符): {mb.hex()[:100]}...")
+
+                # 尝试解码为文本
+                try:
+                    text = mb.decode('utf-8', errors='replace')
+                    print(f"   文本显示: {text[:200]}")
+
+                    # 检查是否包含 flag
+                    if b"flag{" in mb or b"FLAG{" in mb:
+                        flag_candidates.append((m_python_int, text))
+                        print("   🚩 发现包含 'flag{' 的候选！")
+
+                        # 如果是flag，直接提取flag内容
+                        if b"flag{" in mb:
+                            start = mb.index(b"flag{")
+                            end = mb.index(b"}", start) + 1
+                            flag = mb[start:end].decode('utf-8')
+                            print(f"   🏁 提取到的Flag: {flag}")
+                        elif b"FLAG{" in mb:
+                            start = mb.index(b"FLAG{")
+                            end = mb.index(b"}", start) + 1
+                            flag = mb[start:end].decode('utf-8')
+                            print(f"   🏁 提取到的Flag: {flag}")
+                except Exception as e:
+                    print(f"   无法解码为 UTF-8 文本: {e}")
+
+                print("-" * 80)
+
+print("\n" + "="*50)
+print("最终结果汇总:")
+print("="*50)
+print(f"总共尝试组合数: {count_checked}")
+print(f"找到有效候选数: {len(candidates)}")
+
+if flag_candidates:
+    print(f"\n🎉 找到 {len(flag_candidates)} 个包含 flag 的候选:")
+    for idx, (m_int, text) in enumerate(flag_candidates):
+        print(f"\n【Flag 候选 #{idx+1}】")
+        print(f"完整文本: {text}")
+
+        # 提取并显示flag
+        mb = m_int.to_bytes((m_int.bit_length() + 7) // 8, 'big')
+        if b"flag{" in mb:
+            start = mb.index(b"flag{")
+            end = mb.index(b"}", start) + 1
+            flag = mb[start:end].decode('utf-8')
+            print(f"提取到的Flag: {flag}")
+        elif b"FLAG{" in mb:
+            start = mb.index(b"FLAG{")
+            end = mb.index(b"}", start) + 1
+            flag = mb[start:end].decode('utf-8')
+            print(f"提取到的Flag: {flag}")
+else:
+    print(f"\n未找到包含 'flag{{' 的候选")
+    if candidates:
+        print("但找到了其他有效候选，第一个候选的文本尝试显示:")
+        m_int = candidates[0]
+        bytelen = (m_int.bit_length() + 7) // 8
+        mb = m_int.to_bytes(bytelen, 'big')
+        try:
+            text = mb.decode('utf-8', errors='replace')
+            print(text)
+        except:
+            print("无法解码为文本，十六进制显示:")
+            print(mb.hex())
+    else:
+        print("没有找到任何有效候选")
